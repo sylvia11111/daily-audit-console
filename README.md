@@ -22,9 +22,11 @@ PYTHONPYCACHEPREFIX=/private/tmp/daily_audit_pycache python3 -m unittest discove
 
 - SQL 持久化：日报、审计、回答和同步任务都进入 SQLite。
 - 本地审计：根据日报完整性生成 5 道验证问题；五题回答均达到最小长度后通过。
-- 归档链路：审计通过后自动创建同步任务，记录成功、失败和重试状态。
+- 账号分权演示：内置员工、主管和管理员三种身份；员工只能查看自己的日报，主管可查看直属成员，管理员可查看全部记录。
+- 主管审核：审计通过后先进入主管审核；主管通过才会创建企微同步任务，要求补充会留下可追溯的审核意见。
+- 归档链路：主管审核通过后自动创建同步任务，记录成功、失败和重试状态。
 - 企微 MCP：配置 `WECOM_MCP_DOC_URL` 与 `WECOM_DOCUMENT_ID` 后，使用 `get_doc_content` 和 `edit_doc_content` 写入普通企微文档；未配置时显示“本地演示完成”，不会伪装成真实归档。
 
 ## 重要说明
 
-这是本地联调版本，不包含登录、会话或生产级权限控制。真实企微凭据只应放在本机 `.env` 或系统环境变量中，不能提交到版本库。完整发布步骤见 [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md)，今日开发记录见 [DAILY_REPORT.md](DAILY_REPORT.md)。
+这是本地联调版本。界面中的“当前演示身份”通过请求头模拟身份，便于演示角色边界，不是生产级登录或会话系统。生产部署前须替换为企业身份认证，并在服务端验证用户身份和主管关系。真实企微凭据只应放在本机 `.env` 或系统环境变量中，不能提交到版本库。完整发布步骤见 [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md)，今日开发记录见 [DAILY_REPORT.md](DAILY_REPORT.md)。

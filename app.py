@@ -43,7 +43,8 @@ def init_db():
               name TEXT NOT NULL,
               role TEXT NOT NULL,
               role_key TEXT NOT NULL,
-              department TEXT NOT NULL
+              department TEXT NOT NULL,
+              manager_id TEXT
             );
             CREATE TABLE IF NOT EXISTS reports (
               id TEXT PRIMARY KEY,
@@ -56,6 +57,11 @@ def init_db():
               help_text TEXT NOT NULL DEFAULT '',
               version INTEGER NOT NULL DEFAULT 1,
               audit_status TEXT NOT NULL DEFAULT 'DRAFT',
+              manager_review_status TEXT NOT NULL DEFAULT 'NOT_REQUIRED',
+              reviewer_id TEXT,
+              reviewer_name TEXT,
+              review_comment TEXT NOT NULL DEFAULT '',
+              reviewed_at TEXT,
               sync_status TEXT NOT NULL DEFAULT 'not_ready',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
@@ -86,20 +92,74 @@ def init_db():
             );
             """
         )
+        # ALTER-based migrations keep databases created by earlier local builds usable.
+        employee_columns = {row[1] for row in db.execute("PRAGMA table_info(employees)")}
+        report_columns = {row[1] for row in db.execute("PRAGMA table_info(reports)")}
+        if "manager_id" not in employee_columns:
+            db.execute("ALTER TABLE employees ADD COLUMN manager_id TEXT")
+        migrations = {
+            "manager_review_status": "TEXT NOT NULL DEFAULT 'NOT_REQUIRED'",
+            "reviewer_id": "TEXT",
+            "reviewer_name": "TEXT",
+            "review_comment": "TEXT NOT NULL DEFAULT ''",
+            "reviewed_at": "TEXT",
+        }
+        for column, definition in migrations.items():
+            if column not in report_columns:
+                db.execute(f"ALTER TABLE reports ADD COLUMN {column} {definition}")
         count = db.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
         if not count:
             db.executemany(
-                "INSERT INTO employees (id, name, role, role_key, department) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO employees (id, name, role, role_key, department, manager_id) VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    ("emp-chen", "陈远", "算法工程师", "member", "算法平台"),
-                    ("emp-li", "李文", "产品负责人", "manager", "产品与运营"),
-                    ("emp-zhou", "周青", "系统管理员", "admin", "工程效能"),
+                    ("emp-chen", "陈远", "算法工程师", "member", "算法平台", "emp-li"),
+                    ("emp-li", "李文", "产品负责人", "manager", "产品与运营", "emp-zhou"),
+                    ("emp-zhou", "周青", "系统管理员", "admin", "工程效能", None),
                 ],
             )
 
 
 def row_dict(row):
     return dict(row) if row else None
+
+
+def load_employee(employee_id):
+    with get_db() as db:
+        return row_dict(db.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone())
+
+
+def visible_employee_ids(actor):
+    """Return the people whose reports this local RBAC actor may read."""
+    if actor["role_key"] == "admin":
+        return None
+    ids = {actor["id"]}
+    if actor["role_key"] == "manager":
+        with get_db() as db:
+            ids.update(row[0] for row in db.execute("SELECT id FROM employees WHERE manager_id = ?", (actor["id"],)))
+    return ids
+
+
+def can_view_report(actor, report):
+    allowed = visible_employee_ids(actor)
+    return allowed is None or report["employee_id"] in allowed
+
+
+def can_review_report(actor, report):
+    return (
+        report["audit_status"] == "PASSED"
+        and report["manager_review_status"] == "PENDING_REVIEW"
+        and (actor["role_key"] == "admin" or report["employee_id"] != actor["id"] and load_employee(report["employee_id"])["manager_id"] == actor["id"])
+    )
+
+
+def decorate_report(report, actor):
+    if not report:
+        return None
+    report["permissions"] = {
+        "is_owner": actor["id"] == report["employee_id"],
+        "can_review": can_review_report(actor, report),
+    }
+    return report
 
 
 def load_report(report_id):
@@ -201,6 +261,28 @@ def process_sync(report_id):
     return load_report(report_id)
 
 
+def record_manager_review(report_id, actor, decision, comment):
+    """Persist a supervisor decision and start archival only after approval."""
+    report = load_report(report_id)
+    if not report:
+        raise ValueError("日报不存在")
+    if not can_review_report(actor, report):
+        raise PermissionError("当前身份无权审核或日报尚未进入主管审核")
+    decision = str(decision).upper()
+    comment = str(comment).strip()
+    if decision not in ("APPROVED", "REWORK_REQUIRED"):
+        raise ValueError("审核结论必须是 APPROVED 或 REWORK_REQUIRED")
+    if decision == "REWORK_REQUIRED" and len(comment) < 4:
+        raise ValueError("要求补充时请填写具体审核意见")
+    stamp = now()
+    with get_db() as db:
+        db.execute("UPDATE reports SET manager_review_status = ?, reviewer_id = ?, reviewer_name = ?, review_comment = ?, reviewed_at = ?, sync_status = ?, updated_at = ? WHERE id = ?", (decision, actor["id"], actor["name"], comment, stamp, "pending_wecom" if decision == "APPROVED" else "not_ready", stamp, report_id))
+        if decision == "APPROVED":
+            marker = f"<!-- daily-report:{report_id} -->"
+            db.execute("INSERT OR IGNORE INTO sync_jobs (report_id, status, marker, created_at, updated_at) VALUES (?, 'pending', ?, ?, ?)", (report_id, marker, stamp, stamp))
+    return process_sync(report_id) if decision == "APPROVED" else load_report(report_id)
+
+
 class AppHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
@@ -218,6 +300,22 @@ class AppHandler(BaseHTTPRequestHandler):
         if length > 1024 * 1024:
             raise ValueError("请求内容超过 1 MB")
         return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+    def current_actor(self):
+        """Resolve the active local demo identity from the request header."""
+        actor_id = self.headers.get("X-Actor-ID", "emp-chen").strip()
+        actor = load_employee(actor_id)
+        if not actor:
+            self.send_json({"error": "当前身份不存在，请重新选择账号"}, HTTPStatus.UNAUTHORIZED)
+        return actor
+
+    def report_ids_for_actor(self, actor):
+        employee_ids = visible_employee_ids(actor)
+        with get_db() as db:
+            if employee_ids is None:
+                return [row[0] for row in db.execute("SELECT id FROM reports ORDER BY updated_at DESC LIMIT 100")]
+            placeholders = ",".join("?" for _ in employee_ids)
+            return [row[0] for row in db.execute(f"SELECT id FROM reports WHERE employee_id IN ({placeholders}) ORDER BY updated_at DESC LIMIT 100", tuple(employee_ids))]
 
     def serve_static(self, filename):
         path = STATIC / filename
@@ -245,32 +343,65 @@ class AppHandler(BaseHTTPRequestHandler):
                 employees = [row_dict(row) for row in db.execute("SELECT * FROM employees ORDER BY role_key, name")]
             return self.send_json(employees)
         if path == "/api/reports":
-            with get_db() as db:
-                ids = [row[0] for row in db.execute("SELECT id FROM reports ORDER BY updated_at DESC LIMIT 100")]
-            return self.send_json([load_report(report_id) for report_id in ids])
+            actor = self.current_actor()
+            if not actor:
+                return
+            return self.send_json([decorate_report(load_report(report_id), actor) for report_id in self.report_ids_for_actor(actor)])
         if path == "/api/summary":
+            actor = self.current_actor()
+            if not actor:
+                return
+            employee_ids = visible_employee_ids(actor)
+            clause, values = "", ()
+            if employee_ids is not None:
+                clause = f" WHERE employee_id IN ({','.join('?' for _ in employee_ids)})"
+                values = tuple(employee_ids)
             with get_db() as db:
                 today = datetime.now().date().isoformat()
                 summary = {
-                    "today": db.execute("SELECT COUNT(*) FROM reports WHERE report_date = ?", (today,)).fetchone()[0],
-                    "passed": db.execute("SELECT COUNT(*) FROM reports WHERE audit_status = 'PASSED'").fetchone()[0],
-                    "waiting": db.execute("SELECT COUNT(*) FROM reports WHERE audit_status IN ('DRAFT', 'QUESTION_PENDING', 'REANSWER_REQUIRED')").fetchone()[0],
-                    "sync_failed": db.execute("SELECT COUNT(*) FROM reports WHERE sync_status = 'sync_failed'").fetchone()[0],
+                    "today": db.execute(f"SELECT COUNT(*) FROM reports{clause}{' AND' if clause else ' WHERE'} report_date = ?", values + (today,)).fetchone()[0],
+                    "passed": db.execute(f"SELECT COUNT(*) FROM reports{clause}{' AND' if clause else ' WHERE'} audit_status = 'PASSED'", values).fetchone()[0],
+                    "waiting": db.execute(f"SELECT COUNT(*) FROM reports{clause}{' AND' if clause else ' WHERE'} audit_status IN ('DRAFT', 'QUESTION_PENDING', 'REANSWER_REQUIRED')", values).fetchone()[0],
+                    "manager_pending": db.execute(f"SELECT COUNT(*) FROM reports{clause}{' AND' if clause else ' WHERE'} manager_review_status = 'PENDING_REVIEW'", values).fetchone()[0],
+                    "sync_failed": db.execute(f"SELECT COUNT(*) FROM reports{clause}{' AND' if clause else ' WHERE'} sync_status = 'sync_failed'", values).fetchone()[0],
                 }
-            return self.send_json(summary)
+            return self.send_json({**summary, "actor": actor})
+        if path == "/api/team":
+            actor = self.current_actor()
+            if not actor:
+                return
+            if actor["role_key"] == "member":
+                return self.send_json({"error": "当前身份没有团队管理权限"}, HTTPStatus.FORBIDDEN)
+            with get_db() as db:
+                if actor["role_key"] == "admin":
+                    members = [row_dict(row) for row in db.execute("SELECT * FROM employees WHERE id != ? ORDER BY department, name", (actor["id"],))]
+                else:
+                    members = [row_dict(row) for row in db.execute("SELECT * FROM employees WHERE manager_id = ? ORDER BY name", (actor["id"],))]
+            reports = [decorate_report(load_report(report_id), actor) for report_id in self.report_ids_for_actor(actor)]
+            return self.send_json({"members": members, "reports": reports, "actor": actor})
         if path.startswith("/api/reports/"):
+            actor = self.current_actor()
+            if not actor:
+                return
             report = load_report(path.rsplit("/", 1)[1])
-            return self.send_json(report or {"error": "日报不存在"}, HTTPStatus.OK if report else HTTPStatus.NOT_FOUND)
+            if report and not can_view_report(actor, report):
+                return self.send_json({"error": "无权查看这份日报"}, HTTPStatus.FORBIDDEN)
+            return self.send_json(decorate_report(report, actor) or {"error": "日报不存在"}, HTTPStatus.OK if report else HTTPStatus.NOT_FOUND)
         return self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         try:
             payload = self.read_json()
+            actor = self.current_actor()
+            if not actor:
+                return
             if path == "/api/reports":
                 required = ["employee_id", "task_name", "content"]
                 if any(not str(payload.get(field, "")).strip() for field in required):
                     return self.send_json({"error": "员工、关联任务和今日完成不能为空"}, HTTPStatus.BAD_REQUEST)
+                if payload["employee_id"] != actor["id"] and actor["role_key"] != "admin":
+                    return self.send_json({"error": "只能以当前身份提交日报"}, HTTPStatus.FORBIDDEN)
                 with get_db() as db:
                     employee = db.execute("SELECT * FROM employees WHERE id = ?", (payload["employee_id"],)).fetchone()
                     if not employee:
@@ -279,44 +410,62 @@ class AppHandler(BaseHTTPRequestHandler):
                     report_id = f"report-{uuid.uuid4().hex[:12]}"
                     db.execute("""INSERT INTO reports (id, report_date, employee_id, employee_name, task_name, content, plan, help_text, audit_status, sync_status, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', 'not_ready', ?, ?)""", (report_id, payload.get("report_date") or datetime.now().date().isoformat(), employee["id"], employee["name"], payload["task_name"].strip(), payload["content"].strip(), payload.get("plan", "").strip(), payload.get("help_text", "").strip(), stamp, stamp))
-                return self.send_json(load_report(report_id), HTTPStatus.CREATED)
+                return self.send_json(decorate_report(load_report(report_id), actor), HTTPStatus.CREATED)
             if path.endswith("/audit") and path.startswith("/api/reports/"):
                 report_id = path.split("/")[3]
                 report = load_report(report_id)
                 if not report:
                     return self.send_json({"error": "日报不存在"}, HTTPStatus.NOT_FOUND)
+                if report["employee_id"] != actor["id"] and actor["role_key"] != "admin":
+                    return self.send_json({"error": "只有提交人可以发起审计"}, HTTPStatus.FORBIDDEN)
+                if report.get("audit"):
+                    return self.send_json(decorate_report(report, actor))
                 findings, questions = build_audit(report)
                 audit_id, stamp = f"audit-{uuid.uuid4().hex[:12]}", now()
                 with get_db() as db:
                     db.execute("INSERT INTO audits (id, report_id, summary, findings_json, questions_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'QUESTION_PENDING', ?, ?)", (audit_id, report_id, "本地审计已完成，请回答 5 个验证问题。", json.dumps(findings, ensure_ascii=False), json.dumps(questions, ensure_ascii=False), stamp, stamp))
                     db.execute("UPDATE reports SET audit_status = 'QUESTION_PENDING', updated_at = ? WHERE id = ?", (stamp, report_id))
-                return self.send_json(load_report(report_id))
+                return self.send_json(decorate_report(load_report(report_id), actor))
             if path.endswith("/answers") and path.startswith("/api/reports/"):
                 report_id = path.split("/")[3]
                 report = load_report(report_id)
                 if not report or not report.get("audit"):
                     return self.send_json({"error": "请先执行审计"}, HTTPStatus.BAD_REQUEST)
+                if report["employee_id"] != actor["id"] and actor["role_key"] != "admin":
+                    return self.send_json({"error": "只有提交人可以回答审计问题"}, HTTPStatus.FORBIDDEN)
+                if report["audit_status"] == "PASSED":
+                    return self.send_json({"error": "这份日报已完成审计，不能重复回答"}, HTTPStatus.CONFLICT)
                 answers = payload.get("answers", {})
                 questions = report["audit"]["questions"]
                 missing = [question["id"] for question in questions if len(str(answers.get(question["id"], "")).strip()) < 20]
                 audit_status = "REANSWER_REQUIRED" if missing else "PASSED"
+                manager_id = load_employee(report["employee_id"])["manager_id"]
+                review_status = "PENDING_REVIEW" if audit_status == "PASSED" and manager_id else "AUTO_APPROVED" if audit_status == "PASSED" else "NOT_REQUIRED"
+                sync_status = "pending_manager_review" if review_status == "PENDING_REVIEW" else "pending_wecom" if review_status == "AUTO_APPROVED" else "not_ready"
                 stamp = now()
                 with get_db() as db:
                     db.execute("UPDATE audits SET answers_json = ?, status = ?, updated_at = ? WHERE id = ?", (json.dumps(answers, ensure_ascii=False), audit_status, stamp, report["audit"]["id"]))
-                    db.execute("UPDATE reports SET audit_status = ?, sync_status = ?, updated_at = ? WHERE id = ?", (audit_status, "pending_wecom" if audit_status == "PASSED" else "not_ready", stamp, report_id))
-                    if audit_status == "PASSED":
+                    db.execute("UPDATE reports SET audit_status = ?, manager_review_status = ?, sync_status = ?, updated_at = ? WHERE id = ?", (audit_status, review_status, sync_status, stamp, report_id))
+                    if review_status == "AUTO_APPROVED":
                         marker = f"<!-- daily-report:{report_id} -->"
                         db.execute("INSERT OR IGNORE INTO sync_jobs (report_id, status, marker, created_at, updated_at) VALUES (?, 'pending', ?, ?, ?)", (report_id, marker, stamp, stamp))
-                if audit_status == "PASSED":
-                    return self.send_json(process_sync(report_id))
-                return self.send_json(load_report(report_id))
+                if review_status == "AUTO_APPROVED":
+                    return self.send_json(decorate_report(process_sync(report_id), actor))
+                return self.send_json(decorate_report(load_report(report_id), actor))
+            if path.endswith("/review") and path.startswith("/api/reports/"):
+                report_id = path.split("/")[3]
+                return self.send_json(decorate_report(record_manager_review(report_id, actor, payload.get("decision", ""), payload.get("comment", "")), actor))
             if path.endswith("/sync") and path.startswith("/api/reports/"):
                 report_id = path.split("/")[3]
                 report = load_report(report_id)
-                if not report or report["audit_status"] != "PASSED":
-                    return self.send_json({"error": "只有审计通过的日报可以同步"}, HTTPStatus.BAD_REQUEST)
-                return self.send_json(process_sync(report_id))
+                if not report or report["audit_status"] != "PASSED" or report["manager_review_status"] not in ("APPROVED", "AUTO_APPROVED"):
+                    return self.send_json({"error": "只有主管审核通过的日报可以同步"}, HTTPStatus.BAD_REQUEST)
+                if not can_view_report(actor, report):
+                    return self.send_json({"error": "无权同步这份日报"}, HTTPStatus.FORBIDDEN)
+                return self.send_json(decorate_report(process_sync(report_id), actor))
             return self.send_json({"error": "接口不存在"}, HTTPStatus.NOT_FOUND)
+        except PermissionError as error:
+            return self.send_json({"error": str(error)}, HTTPStatus.FORBIDDEN)
         except (ValueError, json.JSONDecodeError) as error:
             return self.send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except sqlite3.Error as error:

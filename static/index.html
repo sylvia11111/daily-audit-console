@@ -10,10 +10,12 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand"><span class="brand-mark">DA</span><span>日报审计台</span></div>
+        <label class="identity-control">当前演示身份<select id="actor-select" aria-label="当前演示身份"></select><span id="actor-context">正在加载身份</span></label>
         <nav class="nav-list" aria-label="主导航">
           <button class="nav-item active" data-view="dashboard">概览</button>
           <button class="nav-item" data-view="submit">提交日报</button>
           <button class="nav-item" data-view="reports">日报记录</button>
+          <button class="nav-item" id="team-nav" data-view="team">团队审核</button>
         </nav>
         <div class="sidebar-footer"><span class="environment-dot"></span><span id="environment-text">本地 SQL 环境</span></div>
       </aside>
@@ -24,6 +26,7 @@
             <article class="stat"><span>今日提交</span><strong id="stat-today">0</strong><small>按日报日期统计</small></article>
             <article class="stat"><span>审计通过</span><strong id="stat-passed">0</strong><small>可进入归档</small></article>
             <article class="stat"><span>待处理</span><strong id="stat-waiting">0</strong><small>待答题或补充</small></article>
+            <article class="stat"><span>主管待审</span><strong id="stat-manager-pending">0</strong><small>等待主管处理</small></article>
             <article class="stat stat-alert"><span>同步异常</span><strong id="stat-failed">0</strong><small>需要重试</small></article>
           </div>
           <section class="section-block"><div class="section-heading"><div><h2>最近日报</h2><p>审计和企微归档状态来自服务端。</p></div><button class="command-button" data-view-target="submit">新建日报</button></div><div id="recent-reports" class="report-list empty-state">尚无日报，先提交一份吧。</div></section>
@@ -41,6 +44,11 @@
           </form>
         </section>
         <section id="reports-view" class="view"><div class="section-heading"><div><h2>日报记录</h2><p>可查看审计、答题和企微同步状态。</p></div></div><div id="all-reports" class="report-list empty-state">正在加载。</div></section>
+        <section id="team-view" class="view">
+          <div class="section-heading"><div><h2>团队审核</h2><p id="team-description">查看直属成员的日报，完成主管审核后才会进入企微归档。</p></div></div>
+          <div id="team-members" class="member-grid"></div>
+          <div id="team-reports" class="report-list empty-state">正在加载团队日报。</div>
+        </section>
       </main>
     </div>
     <dialog id="audit-dialog"><div class="dialog-header"><div><p class="eyebrow">AUDIT WORKSPACE</p><h2 id="audit-title">审计工作台</h2></div><button class="icon-command" id="close-dialog" aria-label="关闭">×</button></div><div id="audit-body"></div></dialog>
