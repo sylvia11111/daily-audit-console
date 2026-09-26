@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>日报审计台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">DA</span><span>日报审计台</span></div>
+        <nav class="nav-list" aria-label="主导航">
+          <button class="nav-item active" data-view="dashboard">概览</button>
+          <button class="nav-item" data-view="submit">提交日报</button>
+          <button class="nav-item" data-view="reports">日报记录</button>
+        </nav>
+        <div class="sidebar-footer"><span class="environment-dot"></span><span id="environment-text">本地 SQL 环境</span></div>
+      </aside>
+      <main>
+        <header class="topbar"><div><p class="eyebrow">DAILY REPORT AUDIT</p><h1 id="page-title">今日概览</h1></div><div class="topbar-status" id="wecom-status">正在检查企微配置</div></header>
+        <section id="dashboard-view" class="view active">
+          <div class="stats-grid">
+            <article class="stat"><span>今日提交</span><strong id="stat-today">0</strong><small>按日报日期统计</small></article>
+            <article class="stat"><span>审计通过</span><strong id="stat-passed">0</strong><small>可进入归档</small></article>
+            <article class="stat"><span>待处理</span><strong id="stat-waiting">0</strong><small>待答题或补充</small></article>
+            <article class="stat stat-alert"><span>同步异常</span><strong id="stat-failed">0</strong><small>需要重试</small></article>
+          </div>
+          <section class="section-block"><div class="section-heading"><div><h2>最近日报</h2><p>审计和企微归档状态来自服务端。</p></div><button class="command-button" data-view-target="submit">新建日报</button></div><div id="recent-reports" class="report-list empty-state">尚无日报，先提交一份吧。</div></section>
+        </section>
+        <section id="submit-view" class="view">
+          <div class="section-heading"><div><h2>提交日报</h2><p>提交后将生成一份不可覆盖的日报版本，并进入审计。</p></div></div>
+          <form id="report-form" class="report-form">
+            <label>提交人<select id="employee" name="employee_id" required></select></label>
+            <label>日报日期<input id="report-date" type="date" name="report_date" required /></label>
+            <label class="wide">关联任务<input name="task_name" required maxlength="80" placeholder="例如：日报审计系统 SQL 存储改造" /></label>
+            <label class="wide">今日完成<textarea name="content" required minlength="20" rows="7" placeholder="说明本人完成的动作、产出、验证方式与当前结果。"></textarea></label>
+            <label>明日计划<textarea name="plan" rows="3" placeholder="可选"></textarea></label>
+            <label>需要协助<textarea name="help_text" rows="3" placeholder="可选"></textarea></label>
+            <div class="form-actions wide"><span id="form-hint">本地服务会先保存到 SQLite。</span><button class="command-button" type="submit">提交并进入审计</button></div>
+          </form>
+        </section>
+        <section id="reports-view" class="view"><div class="section-heading"><div><h2>日报记录</h2><p>可查看审计、答题和企微同步状态。</p></div></div><div id="all-reports" class="report-list empty-state">正在加载。</div></section>
+      </main>
+    </div>
+    <dialog id="audit-dialog"><div class="dialog-header"><div><p class="eyebrow">AUDIT WORKSPACE</p><h2 id="audit-title">审计工作台</h2></div><button class="icon-command" id="close-dialog" aria-label="关闭">×</button></div><div id="audit-body"></div></dialog>
+    <div id="toast" role="status"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

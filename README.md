@@ -1,0 +1,30 @@
+# 日报审计台
+
+一个面向团队日报提交、理解验证与归档留存的本地可运行系统。员工提交日报后，系统保存不可覆盖的版本，生成审计问题并记录回答；审计通过的日报会自动进入企微同步队列，保留同步结果和重试记录。
+
+当前版本使用 Python 标准库、SQLite 和原生 Web 前端，不依赖安装第三方包，适合先完成业务闭环与本地联调，再逐步替换为集中式数据库和企业身份体系。
+
+## 启动
+
+```bash
+python3 app.py
+```
+
+打开 `http://127.0.0.1:4174`。首次启动会创建 `data/daily_audit.sqlite3` 和三个演示员工。
+
+运行测试：
+
+```bash
+PYTHONPYCACHEPREFIX=/private/tmp/daily_audit_pycache python3 -m unittest discover -s tests -v
+```
+
+## 当前能力
+
+- SQL 持久化：日报、审计、回答和同步任务都进入 SQLite。
+- 本地审计：根据日报完整性生成 5 道验证问题；五题回答均达到最小长度后通过。
+- 归档链路：审计通过后自动创建同步任务，记录成功、失败和重试状态。
+- 企微 MCP：配置 `WECOM_MCP_DOC_URL` 与 `WECOM_DOCUMENT_ID` 后，使用 `get_doc_content` 和 `edit_doc_content` 写入普通企微文档；未配置时显示“本地演示完成”，不会伪装成真实归档。
+
+## 重要说明
+
+这是本地联调版本，不包含登录、会话或生产级权限控制。真实企微凭据只应放在本机 `.env` 或系统环境变量中，不能提交到版本库。完整发布步骤见 [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md)，今日开发记录见 [DAILY_REPORT.md](DAILY_REPORT.md)。
