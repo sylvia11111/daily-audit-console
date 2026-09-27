@@ -15,7 +15,7 @@ let teamData = null;
 let selectedReport = null;
 const dialog = document.querySelector('#audit-dialog');
 const toast = document.querySelector('#toast');
-const titles = { dashboard: '今日概览', submit: '提交日报', reports: '日报记录', team: '团队审核' };
+const titles = { dashboard: '工作台', submit: '提交日报', reports: '日报记录', team: '团队审核' };
 const statusLabel = {
   DRAFT: '草稿', QUESTION_PENDING: '等待回答', REANSWER_REQUIRED: '需要补答', PASSED: '审计通过',
   NOT_REQUIRED: '未进入主管审核', PENDING_REVIEW: '等待主管审核', APPROVED: '主管已通过', AUTO_APPROVED: '自动通过', REWORK_REQUIRED: '主管要求补充',
@@ -39,6 +39,66 @@ function row(report) {
 }
 function renderReports(target, items, emptyText) {
   document.querySelector(target).innerHTML = items.length ? items.map(row).join('') : `<div class="empty-state">${emptyText}</div>`;
+}
+
+function actionFor(report) {
+  if (report.permissions.can_review) return { rank: 1, label: '主管审核', detail: '审计已通过，等待你的验收结论。', command: '审核日报' };
+  if (report.permissions.is_owner && report.manager_review_status === 'REWORK_REQUIRED') return { rank: 2, label: '主管要求补充', detail: report.review_comment || '请根据主管意见补充日报。', command: '查看意见' };
+  if (report.permissions.is_owner && ['QUESTION_PENDING', 'REANSWER_REQUIRED'].includes(report.audit_status)) return { rank: 3, label: '等待回答审计', detail: '完成 5 个理解验证问题后进入主管审核。', command: '继续回答' };
+  if (report.sync_status === 'sync_failed') return { rank: 4, label: '企微同步异常', detail: report.sync_job?.message || '归档未完成，请检查同步配置。', command: '查看详情' };
+  return null;
+}
+
+function renderDashboard(summary) {
+  const active = actor();
+  const actions = reports.map((report) => ({ report, action: actionFor(report) })).filter((item) => item.action).sort((left, right) => left.action.rank - right.action.rank);
+  const todayReports = reports.filter((report) => report.report_date === dateToday());
+  const passed = reports.filter((report) => report.audit_status === 'PASSED').length;
+  const reviewed = reports.filter((report) => ['APPROVED', 'AUTO_APPROVED'].includes(report.manager_review_status)).length;
+  const synced = reports.filter((report) => ['synced', 'demo_synced'].includes(report.sync_status)).length;
+  document.querySelector('#workflow-submitted').textContent = todayReports.length;
+  document.querySelector('#workflow-audited').textContent = passed;
+  document.querySelector('#workflow-reviewed').textContent = reviewed;
+  document.querySelector('#workflow-synced').textContent = synced;
+  document.querySelector('#priority-count').textContent = actions.length;
+
+  const primary = document.querySelector('#primary-action');
+  const managerActions = actions.filter((item) => item.report.permissions.can_review);
+  if (isManager() && managerActions.length) {
+    document.querySelector('#workspace-title').textContent = `${active.name}，有 ${managerActions.length} 份日报等待审核`;
+    document.querySelector('#workspace-copy').textContent = '主管审核是日报归档前的最后一道关口，优先处理等待时间较长的日报。';
+    primary.textContent = '处理团队审核';
+    primary.onclick = () => view('team');
+  } else if (actions.length) {
+    const next = actions[0];
+    document.querySelector('#workspace-title').textContent = `${active.name}，${next.action.label}`;
+    document.querySelector('#workspace-copy').textContent = next.action.detail;
+    primary.textContent = next.action.command;
+    primary.onclick = () => openReport(next.report.id);
+  } else {
+    document.querySelector('#workspace-title').textContent = `${active.name}，今天的日报闭环很顺畅`;
+    document.querySelector('#workspace-copy').textContent = isManager() ? '当前没有待审核日报，可在团队审核中查看整体进度。' : '暂无待处理事项，提交日报后系统会自动开始审计。';
+    primary.textContent = isManager() ? '查看团队审核' : '提交日报';
+    primary.onclick = () => view(isManager() ? 'team' : 'submit');
+  }
+
+  document.querySelector('#priority-list').innerHTML = actions.length ? actions.slice(0, 4).map(({ report, action }) => `<article class="priority-row"><span class="priority-marker priority-${action.rank}"></span><div class="priority-copy"><span>${escapeHtml(action.label)}</span><strong>${escapeHtml(report.task_name)}</strong><p>${escapeHtml(report.employee_name)} · ${escapeHtml(action.detail)}</p></div><button class="text-command" data-report-id="${report.id}">${action.command}</button></article>`).join('') : '<div class="empty-priority"><strong>暂无待处理事项</strong><span>新的日报、审计反馈和同步异常会优先显示在这里。</span></div>';
+
+  const teamSize = isManager() ? (teamData?.members.length || 1) : 1;
+  const completedToday = isManager() ? new Set(todayReports.map((report) => report.employee_id).filter((id) => id !== currentActorId)).size : todayReports.length;
+  const completion = Math.min(100, Math.round((completedToday / teamSize) * 100));
+  const failed = reports.filter((report) => report.sync_status === 'sync_failed').length;
+  document.querySelector('#health-title').textContent = isManager() ? '团队今日健康度' : '我的今日闭环';
+  document.querySelector('#completion-ring').style.setProperty('--completion', `${completion * 3.6}deg`);
+  document.querySelector('#completion-percent').textContent = `${completion}%`;
+  document.querySelector('#health-submitted').textContent = isManager() ? `${completedToday}/${teamSize}` : summary.today;
+  document.querySelector('#health-pending').textContent = actions.length;
+  document.querySelector('#health-failed').textContent = failed;
+  document.querySelector('#health-status').textContent = failed ? '需关注' : actions.length ? '处理中' : '状态良好';
+  document.querySelector('#health-status').className = `health-status ${failed ? 'alert' : actions.length ? 'waiting' : ''}`;
+  document.querySelector('#health-copy').textContent = failed ? '存在归档异常，建议先检查企微 MCP 配置与同步记录。' : actions.length ? '优先处理上方队列中的事项，避免日报停留在审核节点。' : '当前可见范围内没有会阻塞日报归档的事项。';
+
+  document.querySelector('#recent-reports').innerHTML = reports.length ? reports.slice(0, 5).map((report) => `<article class="activity-row" data-report-id="${report.id}"><div class="activity-avatar">${escapeHtml(report.employee_name.slice(0, 1))}</div><div><strong>${escapeHtml(report.task_name)}</strong><p>${escapeHtml(report.employee_name)} · ${report.report_date} · ${chip(report.manager_review_status)}</p></div><span>${chip(report.sync_status)}</span></article>`).join('') : '<div class="empty-state">尚无日报，先提交一份吧。</div>';
 }
 
 function updateIdentityUI() {
@@ -69,15 +129,10 @@ async function refresh() {
   const [summary, nextReports, health, nextTeam] = await Promise.all(requests);
   reports = nextReports;
   teamData = nextTeam || null;
-  document.querySelector('#stat-today').textContent = summary.today;
-  document.querySelector('#stat-passed').textContent = summary.passed;
-  document.querySelector('#stat-waiting').textContent = summary.waiting;
-  document.querySelector('#stat-manager-pending').textContent = summary.manager_pending;
-  document.querySelector('#stat-failed').textContent = summary.sync_failed;
   document.querySelector('#wecom-status').textContent = health.wecom_configured ? '企微 MCP 已配置' : '企微：本地演示模式';
-  renderReports('#recent-reports', reports, '尚无日报，先提交一份吧。');
   renderReports('#all-reports', reports, '当前身份没有可见日报。');
   renderTeam();
+  renderDashboard(summary);
 }
 
 function reviewPanel(report) {
@@ -134,7 +189,7 @@ async function retrySync() { try { const updated = await api(`/api/reports/${sel
 document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => view(item.dataset.view)));
 document.querySelectorAll('[data-view-target]').forEach((item) => item.addEventListener('click', () => view(item.dataset.viewTarget)));
 document.querySelector('#close-dialog').onclick = () => dialog.close();
-document.addEventListener('click', (event) => { const button = event.target.closest('[data-report-id]'); if (button) openReport(button.dataset.reportId); });
+document.addEventListener('click', (event) => { const target = event.target.closest('[data-report-id]'); if (target) openReport(target.dataset.reportId); });
 document.querySelector('#actor-select').addEventListener('change', async (event) => {
   currentActorId = event.target.value; localStorage.setItem('daily-audit-actor', currentActorId); updateIdentityUI(); view('dashboard');
   try { await refresh(); } catch (error) { notify(error.message); }
@@ -146,6 +201,7 @@ document.querySelector('#report-form').addEventListener('submit', async (event) 
 
 async function boot() {
   document.querySelector('#report-date').value = dateToday();
+  document.querySelector('#today-label').textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date());
   employees = await api('/api/employees');
   if (!employees.some((item) => item.id === currentActorId)) currentActorId = employees[0].id;
   document.querySelector('#actor-select').innerHTML = employees.map((item) => `<option value="${item.id}">${escapeHtml(item.name)} · ${escapeHtml(item.role)}</option>`).join('');

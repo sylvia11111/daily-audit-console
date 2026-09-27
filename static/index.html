@@ -20,16 +20,20 @@
         <div class="sidebar-footer"><span class="environment-dot"></span><span id="environment-text">本地 SQL 环境</span></div>
       </aside>
       <main>
-        <header class="topbar"><div><p class="eyebrow">DAILY REPORT AUDIT</p><h1 id="page-title">今日概览</h1></div><div class="topbar-status" id="wecom-status">正在检查企微配置</div></header>
+        <header class="topbar"><div><p class="eyebrow">DAILY REPORT AUDIT</p><h1 id="page-title">工作台</h1></div><div class="topbar-meta"><time id="today-label"></time><div class="topbar-status" id="wecom-status">正在检查企微配置</div></div></header>
         <section id="dashboard-view" class="view active">
-          <div class="stats-grid">
-            <article class="stat"><span>今日提交</span><strong id="stat-today">0</strong><small>按日报日期统计</small></article>
-            <article class="stat"><span>审计通过</span><strong id="stat-passed">0</strong><small>可进入归档</small></article>
-            <article class="stat"><span>待处理</span><strong id="stat-waiting">0</strong><small>待答题或补充</small></article>
-            <article class="stat"><span>主管待审</span><strong id="stat-manager-pending">0</strong><small>等待主管处理</small></article>
-            <article class="stat stat-alert"><span>同步异常</span><strong id="stat-failed">0</strong><small>需要重试</small></article>
+          <section class="workspace-hero">
+            <div class="workspace-intro"><p class="eyebrow">TODAY'S FOCUS</p><h2 id="workspace-title">正在整理今天的工作</h2><p id="workspace-copy">日报提交、审计和归档状态会在这里汇总。</p></div>
+            <button class="command-button primary-action" id="primary-action" type="button">提交日报</button>
+            <div class="workflow-strip" aria-label="日报闭环进度">
+              <div><span id="workflow-submitted">0</span><small>已提交</small></div><i></i><div><span id="workflow-audited">0</span><small>审计通过</small></div><i></i><div><span id="workflow-reviewed">0</span><small>主管通过</small></div><i></i><div><span id="workflow-synced">0</span><small>已归档</small></div>
+            </div>
+          </section>
+          <div class="dashboard-grid">
+            <section class="focus-panel"><div class="panel-heading"><div><p class="eyebrow">ACTION QUEUE</p><h2>优先处理</h2></div><span id="priority-count" class="count-badge">0</span></div><div id="priority-list" class="priority-list"></div></section>
+            <section class="health-panel"><div class="panel-heading"><div><p class="eyebrow">DAILY HEALTH</p><h2 id="health-title">今日闭环</h2></div><span id="health-status" class="health-status">正常</span></div><div class="health-content"><div id="completion-ring" class="completion-ring"><strong id="completion-percent">0%</strong><span>完成率</span></div><div class="health-stats"><div><strong id="health-submitted">0</strong><span>今日提交</span></div><div><strong id="health-pending">0</strong><span>待处理</span></div><div><strong id="health-failed">0</strong><span>归档异常</span></div></div></div><p id="health-copy" class="health-copy"></p></section>
           </div>
-          <section class="section-block"><div class="section-heading"><div><h2>最近日报</h2><p>审计和企微归档状态来自服务端。</p></div><button class="command-button" data-view-target="submit">新建日报</button></div><div id="recent-reports" class="report-list empty-state">尚无日报，先提交一份吧。</div></section>
+          <section class="activity-section"><div class="section-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h2>最近动态</h2><p>从日报提交到企微归档的最新变化。</p></div><button class="text-command" data-view-target="reports">查看全部</button></div><div id="recent-reports" class="activity-list empty-state">尚无日报，先提交一份吧。</div></section>
         </section>
         <section id="submit-view" class="view">
           <div class="section-heading"><div><h2>提交日报</h2><p>提交后将生成一份不可覆盖的日报版本，并进入审计。</p></div></div>
