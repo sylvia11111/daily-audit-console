@@ -201,6 +201,24 @@ def build_audit(report):
     return findings, questions
 
 
+def create_audit(report_id):
+    """Create the first audit as part of report submission; safe to call repeatedly."""
+    report = load_report(report_id)
+    if not report:
+        raise ValueError("日报不存在")
+    if report.get("audit"):
+        return report
+    findings, questions = build_audit(report)
+    audit_id, stamp = f"audit-{uuid.uuid4().hex[:12]}", now()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO audits (id, report_id, summary, findings_json, questions_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'QUESTION_PENDING', ?, ?)",
+            (audit_id, report_id, "已自动完成首轮审计，请回答 5 个验证问题。", json.dumps(findings, ensure_ascii=False), json.dumps(questions, ensure_ascii=False), stamp, stamp),
+        )
+        db.execute("UPDATE reports SET audit_status = 'QUESTION_PENDING', updated_at = ? WHERE id = ?", (stamp, report_id))
+    return load_report(report_id)
+
+
 def mcp_content(response):
     result = response.get("result", response)
     for item in result.get("content", []) if isinstance(result, dict) else []:
@@ -410,7 +428,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     report_id = f"report-{uuid.uuid4().hex[:12]}"
                     db.execute("""INSERT INTO reports (id, report_date, employee_id, employee_name, task_name, content, plan, help_text, audit_status, sync_status, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', 'not_ready', ?, ?)""", (report_id, payload.get("report_date") or datetime.now().date().isoformat(), employee["id"], employee["name"], payload["task_name"].strip(), payload["content"].strip(), payload.get("plan", "").strip(), payload.get("help_text", "").strip(), stamp, stamp))
-                return self.send_json(decorate_report(load_report(report_id), actor), HTTPStatus.CREATED)
+                return self.send_json(decorate_report(create_audit(report_id), actor), HTTPStatus.CREATED)
             if path.endswith("/audit") and path.startswith("/api/reports/"):
                 report_id = path.split("/")[3]
                 report = load_report(report_id)
@@ -418,14 +436,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "日报不存在"}, HTTPStatus.NOT_FOUND)
                 if report["employee_id"] != actor["id"] and actor["role_key"] != "admin":
                     return self.send_json({"error": "只有提交人可以发起审计"}, HTTPStatus.FORBIDDEN)
-                if report.get("audit"):
-                    return self.send_json(decorate_report(report, actor))
-                findings, questions = build_audit(report)
-                audit_id, stamp = f"audit-{uuid.uuid4().hex[:12]}", now()
-                with get_db() as db:
-                    db.execute("INSERT INTO audits (id, report_id, summary, findings_json, questions_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'QUESTION_PENDING', ?, ?)", (audit_id, report_id, "本地审计已完成，请回答 5 个验证问题。", json.dumps(findings, ensure_ascii=False), json.dumps(questions, ensure_ascii=False), stamp, stamp))
-                    db.execute("UPDATE reports SET audit_status = 'QUESTION_PENDING', updated_at = ? WHERE id = ?", (stamp, report_id))
-                return self.send_json(decorate_report(load_report(report_id), actor))
+                return self.send_json(decorate_report(create_audit(report_id), actor))
             if path.endswith("/answers") and path.startswith("/api/reports/"):
                 report_id = path.split("/")[3]
                 report = load_report(report_id)

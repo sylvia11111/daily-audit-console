@@ -77,3 +77,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(reworked["sync_status"], "not_ready")
         with self.assertRaises(PermissionError):
             app.record_manager_review("report-review-rework", employee, "APPROVED", "")
+
+    def test_submission_audit_is_created_once_and_contains_questions(self):
+        stamp = app.now()
+        report_id = "report-auto-audit"
+        with app.get_db() as db:
+            employee = db.execute("SELECT * FROM employees WHERE id = 'emp-chen'").fetchone()
+            db.execute(
+                """INSERT INTO reports (id, report_date, employee_id, employee_name, task_name, content, plan, help_text, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (report_id, "2026-09-27", employee["id"], employee["name"], "自动审计验证", "我完成了日报提交后自动生成审计结论与理解验证问题的服务端流程验证。", "验收自动审计", "无", stamp, stamp),
+            )
+
+        first = app.create_audit(report_id)
+        second = app.create_audit(report_id)
+
+        self.assertEqual(first["audit_status"], "QUESTION_PENDING")
+        self.assertEqual(first["audit"]["summary"], "已自动完成首轮审计，请回答 5 个验证问题。")
+        self.assertEqual(len(first["audit"]["questions"]), 5)
+        self.assertEqual(first["audit"]["id"], second["audit"]["id"])
+        with app.get_db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM audits WHERE report_id = ?", (report_id,)).fetchone()[0], 1)

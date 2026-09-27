@@ -196,7 +196,7 @@ document.querySelector('#actor-select').addEventListener('change', async (event)
 });
 document.querySelector('#report-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const values = Object.fromEntries(new FormData(event.currentTarget));
-  try { const report = await api('/api/reports', { method: 'POST', body: JSON.stringify(values) }); event.currentTarget.reset(); document.querySelector('#report-date').value = dateToday(); updateIdentityUI(); await refresh(); await openReport(report.id); notify('日报已保存，开始审计。'); } catch (error) { notify(error.message); }
+  try { const report = await api('/api/reports', { method: 'POST', body: JSON.stringify(values) }); event.currentTarget.reset(); document.querySelector('#report-date').value = dateToday(); updateIdentityUI(); await refresh(); await openReport(report.id); notify('日报已保存，首轮审计已自动完成。'); } catch (error) { notify(error.message); }
 });
 
 async function boot() {
